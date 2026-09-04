@@ -1,0 +1,34 @@
+# ═══ 极简课表 Monorepo .gitignore ═══
+# 只纳入应用源码；构建产物/依赖/本机 SDK 一律不入库。
+
+# ── 构建产物与依赖 ──
+node_modules/
+build/
+.gradle/
+*.apk
+*.log
+
+# ── 本机 Android SDK / Gradle 缓存（外部，勿提交）──
+/tools/
+
+# ── 机器相关配置 ──
+android-build/android/local.properties
+
+# ── Capacitor 生成的 Web 资源副本（由 cap sync 从 minimal-timetable 生成）──
+android-build/android/app/src/main/assets/public/
+
+# ── 预览 / 临时测试文件 ──
+_ui-preview/
+_timetable-preview/
+_preview-server.js
+_fresh-server.js
+.dsh-vision-router/
+
+# ── 与本项目无关的其它子工程 ──
+/excel-demo/
+/game1/
+
+# ── 系统杂项 ──
+Thumbs.db
+desktop.ini
+.DS_Store
