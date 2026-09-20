@@ -96,6 +96,8 @@ function resolveWeekdayToken(t) {
 /* ─────────────── 状态 ─────────────── */
 let state = null;
 let currentTab = 'today';
+let copiedCourse = null;
+let scheduleContextMenu = null;
 
 function defaultState() {
   const now = new Date();
@@ -207,6 +209,67 @@ function toast(msg) {
   root.appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 320); }, 2200);
 }
+
+function closeScheduleContextMenu() {
+  if (scheduleContextMenu) scheduleContextMenu.remove();
+  scheduleContextMenu = null;
+}
+
+function openScheduleContextMenu(ev, items) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  closeScheduleContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'schedule-context-menu';
+  menu.setAttribute('role', 'menu');
+  for (const item of items) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = item.label;
+    button.disabled = !!item.disabled;
+    button.setAttribute('role', 'menuitem');
+    button.addEventListener('click', () => {
+      closeScheduleContextMenu();
+      if (!item.disabled) item.action();
+    });
+    menu.appendChild(button);
+  }
+  document.body.appendChild(menu);
+  scheduleContextMenu = menu;
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(ev.clientX, window.innerWidth - rect.width - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(ev.clientY, window.innerHeight - rect.height - 8)) + 'px';
+  const firstEnabled = menu.querySelector('button:not(:disabled)');
+  if (firstEnabled) firstEnabled.focus({ preventScroll: true });
+}
+
+function copyCourse(course) {
+  copiedCourse = { ...course, weeks: { ...(course.weeks || {}), list: [...((course.weeks && course.weeks.list) || [])] } };
+  toast(`已复制「${course.name}」，请右键空白格粘贴`);
+}
+
+function cloneCourseAt(source, weekday, slotIndex, slotCount) {
+  const duration = Math.max(1, (+source.endSlot || 1) - (+source.startSlot || 1) + 1);
+  const startSlot = Math.max(1, Math.min(slotIndex + 1, slotCount));
+  return {
+    ...source,
+    id: uid(),
+    weekday,
+    startSlot,
+    endSlot: Math.min(startSlot + duration - 1, slotCount),
+    weeks: { ...(source.weeks || {}), list: [...((source.weeks && source.weeks.list) || [])] },
+  };
+}
+
+function pasteCourse(weekday, slotIndex) {
+  if (!copiedCourse) { toast('请先右键复制一门课程'); return; }
+  const course = cloneCourseAt(copiedCourse, weekday, slotIndex, state.meta.slotTimes.length);
+  state.courses.push(course);
+  saveState();
+  renderAll();
+  toast(`已粘贴「${course.name}」到${WEEKDAYS[weekday]}第${course.startSlot}节`);
+}
+
 function openConfirm(title, msg, actions, onPick) {
   const btns = actions.map(a => `<button class="btn ${a.danger ? 'danger' : 'ghost'}" data-v="${a.val}">${esc(a.label)}</button>`).join('');
   openModal(`<div class="modal-head"><h3>${esc(title)}</h3><button class="modal-close" id="m-close">✕</button></div>
@@ -387,6 +450,10 @@ function renderScheduleBody() {
   g.innerHTML = html;
   g.querySelectorAll('.cell.empty').forEach(el => {
     el.addEventListener('click', () => openCourseModal(null, +el.dataset.wd, +el.dataset.slot));
+    el.addEventListener('contextmenu', ev => openScheduleContextMenu(ev, [
+      { label: copiedCourse ? `粘贴「${copiedCourse.name}」` : '暂无已复制课程', disabled: !copiedCourse, action: () => pasteCourse(+el.dataset.wd, +el.dataset.slot) },
+      { label: '新增课程', action: () => openCourseModal(null, +el.dataset.wd, +el.dataset.slot) },
+    ]));
   });
 
   const courses = state.courses.filter(c => courseInWeek(c, w));
@@ -406,11 +473,15 @@ function renderScheduleBody() {
       ${loc ? `<div class="cb-sub">${esc(loc)}</div>` : ''}`;
     el.title = `${c.name}${c.room ? ' · ' + c.room : ''}${c.teacher ? ' · ' + c.teacher : ''}`;
     el.addEventListener('click', ev => { ev.stopPropagation(); openCourseDetailModal(c); });
+    el.addEventListener('contextmenu', ev => openScheduleContextMenu(ev, [
+      { label: '复制课程', action: () => copyCourse(c) },
+      { label: '编辑课程', action: () => openCourseModal(c) },
+    ]));
     g.appendChild(el);
   }
   byId('schedule-hint').textContent = courses.length
-    ? '上下滚动查看全部节次 · 点击课程查看完整信息'
-    : '本周暂无课程 · 点击空白格即可添加';
+    ? '点击课程查看详情 · 右键课程复制，右键空白格粘贴'
+    : '本周暂无课程 · 点击空白格添加，右键可粘贴';
 }
 
 /* ─────────────── 渲染：今日页 / 倒数日 ─────────────── */
@@ -1068,8 +1139,16 @@ function bindEvents() {
 
   /* ESC 关闭弹层（进度类弹层不可关闭除外） */
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && byId('modal-root').dataset.closable !== '0') closeModal();
+    if (e.key === 'Escape') {
+      closeScheduleContextMenu();
+      if (byId('modal-root').dataset.closable !== '0') closeModal();
+    }
   });
+  document.addEventListener('pointerdown', e => {
+    if (scheduleContextMenu && !scheduleContextMenu.contains(e.target)) closeScheduleContextMenu();
+  });
+  byId('schedule-scroll').addEventListener('scroll', closeScheduleContextMenu, { passive: true });
+  window.addEventListener('blur', closeScheduleContextMenu);
 }
 
 /* ─────────────── 初始化 ─────────────── */
@@ -1092,6 +1171,6 @@ if (typeof document !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     parseSlotTime, toMin, fmtMin, strFromDate, dateFromStr, startOfDay, addDays,
-    resolveWeekdayToken, cn2num, courseInWeek, describeWeeks,
+    resolveWeekdayToken, cn2num, courseInWeek, describeWeeks, cloneCourseAt,
   };
 }
