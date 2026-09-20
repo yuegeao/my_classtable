@@ -3,12 +3,12 @@
    - 静态资源：缓存优先 + 后台更新（离线可用） */
 'use strict';
 
-const CACHE = 'minimal-timetable-v32';
+const CACHE = 'minimal-timetable-v35';
 const SHELL = [
   './',
   './index.html',
-  './style.css?v=132',
-  './app.js?v=132',
+  './style.css?v=135',
+  './app.js?v=135',
   './manifest.webmanifest',
 ];
 

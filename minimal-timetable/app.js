@@ -120,6 +120,7 @@ function defaultState() {
       countdownWarn: 3,        /* 倒数预警天数：剩余天数低于此值标红 */
       countdownWarnOn: true,   /* 倒数预警开关 */
       countdownManual: false,  /* 倒数日是否已手动排序（长按换位后为 true） */
+      scheduleOverrides: [],   /* 调休：[{ date:'YYYY-MM-DD', sourceDate:'YYYY-MM-DD' }] */
     },
     courses: [],
     countdowns: [],
@@ -132,6 +133,13 @@ function normalizeState(raw) {
   meta.slotTimes = Array.isArray(meta.slotTimes) && meta.slotTimes.length
     ? meta.slotTimes.map(x => String(x)) : d.meta.slotTimes;
   meta.notified = Array.isArray(meta.notified) ? meta.notified : [];
+  meta.scheduleOverrides = Array.isArray(meta.scheduleOverrides)
+    ? meta.scheduleOverrides.filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.date) && (
+      /^\d{4}-\d{2}-\d{2}$/.test(x.sourceDate || '') || (Number.isInteger(+x.weekday) && +x.weekday >= 0 && +x.weekday <= 6)
+    )).map(x => /^\d{4}-\d{2}-\d{2}$/.test(x.sourceDate || '')
+      ? { date: x.date, sourceDate: x.sourceDate }
+      : { date: x.date, weekday: +x.weekday })
+    : [];
   return { version: d.version, meta, courses: Array.isArray(s.courses) ? s.courses : [], countdowns: Array.isArray(s.countdowns) ? s.countdowns : [] };
 }
 function loadState() {
@@ -160,6 +168,33 @@ function courseInWeek(c, w) {
   if (m.mode === 'odd') return w % 2 === 1;
   if (m.mode === 'even') return w % 2 === 0;
   return Array.isArray(m.list) && m.list.indexOf(w) >= 0;
+}
+
+function adjustedWeekday(date, overrides) {
+  const actual = (date.getDay() + 6) % 7;
+  const key = strFromDate(date);
+  const item = (overrides || []).find(x => x.date === key);
+  if (!item) return actual;
+  const source = dateFromStr(item.sourceDate);
+  return !isNaN(source.getTime()) ? (source.getDay() + 6) % 7 : +item.weekday;
+}
+function scheduleOverrideForDate(date) {
+  const key = strFromDate(date);
+  return (state.meta.scheduleOverrides || []).find(x => x.date === key) || null;
+}
+function scheduleWeekdayForDate(date) {
+  return adjustedWeekday(date, state.meta.scheduleOverrides);
+}
+function scheduleWeekForDate(date, fallbackWeek) {
+  const item = scheduleOverrideForDate(date);
+  const source = item && dateFromStr(item.sourceDate);
+  return source && !isNaN(source.getTime()) ? weekOfDate(source) : fallbackWeek;
+}
+function scheduleOverrideText(item) {
+  if (!item) return '';
+  const source = dateFromStr(item.sourceDate);
+  if (!isNaN(source.getTime())) return `${item.sourceDate}（${WEEKDAYS[(source.getDay() + 6) % 7]}）`;
+  return `${WEEKDAYS[+item.weekday]}课表`;
 }
 
 /* ─────────────── 主题 ─────────────── */
@@ -287,9 +322,10 @@ function nextClassView(now) {
   const todayWd = (now.getDay() + 6) % 7;
   const w0 = effectiveWeek();
   for (let off = 0; off < 14; off++) {
-    const day = (todayWd + off) % 7;
-    const week = w0 + Math.floor((todayWd + off) / 7);
     const date = addDays(startOfDay(now), off);
+    const day = scheduleWeekdayForDate(date);
+    const override = scheduleOverrideForDate(date);
+    const week = scheduleWeekForDate(date, w0 + Math.floor((todayWd + off) / 7));
     const list = state.courses
       .filter(c => c.weekday === day && courseInWeek(c, week))
       .sort((a, b) => a.startSlot - b.startSlot);
@@ -307,7 +343,7 @@ function nextClassView(now) {
       const timeStr = h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
       return {
         state: 'next', course: c, ongoing, timeStr,
-        meta: `第${week}周 · 第${c.startSlot}节 ${state.meta.slotTimes[c.startSlot - 1]}`,
+        meta: `${override ? `${strFromDate(date)}调休 · 按${scheduleOverrideText(override)}上课 · ` : ''}第${week}周 · 第${c.startSlot}节 ${state.meta.slotTimes[c.startSlot - 1]}`,
         stateText: ongoing ? '本节课进行中' : '点击卡片查看本周课表',
       };
     }
@@ -347,22 +383,9 @@ function renderSchedule() {
 }
 
 
-/* 课程名按「一行两个字」断行：中文每 2 字一行；英文/数字整段保留，不拆成单字母 */
+/* 课程名按色块可用宽度自然换行 */
 function cbNameLines(name) {
-  const isCJK = ch => { const n = ch.charCodeAt(0); return n >= 0x2e80; };
-  let out = '', i = 0;
-  while (i < name.length) {
-    if (isCJK(name[i])) {
-      let take = '';
-      while (i < name.length && isCJK(name[i]) && take.length < 2) take += name[i++];
-      out += '<span class="cb-line">' + esc(take) + '</span>';
-    } else {
-      let run = '';
-      while (i < name.length && !isCJK(name[i])) run += name[i++];
-      out += '<span class="cb-line">' + esc(run) + '</span>';
-    }
-  }
-  return out;
+  return esc(name);
 }
 
 /* 顶部星期表头：独立于滚动区渲染，天然固定，杜绝 sticky 错位 */
@@ -378,8 +401,9 @@ function renderScheduleHead() {
     const d = addDays(start, i);
     const isToday = todayInView && i === todayWd;
     const isWeekend = i >= 5;
-    html += `<div class="cell header${isToday ? ' today-col' : ''}${isWeekend && !isToday ? ' weekend-col' : ''}">
-      <b>${WEEKDAYS[i]}</b><span>${d.getMonth() + 1}/${d.getDate()}</span></div>`;
+    const override = scheduleOverrideForDate(d);
+    html += `<div class="cell header${isToday ? ' today-col' : ''}${isWeekend && !isToday ? ' weekend-col' : ''}${override ? ' adjusted-col' : ''}"${override ? ` title="按 ${esc(scheduleOverrideText(override))} 的课程上课"` : ''}>
+      <b>${WEEKDAYS[i]}</b><span>${d.getMonth() + 1}/${d.getDate()}${override ? ' · 调休' : ''}</span></div>`;
   }
   h.innerHTML = html;
 }
@@ -427,6 +451,7 @@ function renderScheduleBody() {
       for (let c = 0; c < 7; c++) {
         let cls = 'cell empty' + (rLine ? ' period-line' : '');
         if (c >= 5) cls += ' weekend-col';
+        if (scheduleOverrideForDate(addDays(start, c))) cls += ' adjusted-col';
         if (todayInView && c === todayWd) {
           cls += ' today-col';
           if (nowMin >= ra && nowMin < b2) cls += ' now-slot';
@@ -439,6 +464,7 @@ function renderScheduleBody() {
     for (let c = 0; c < 7; c++) {
       let cls = 'cell empty' + (rLine ? ' period-line' : '');
       if (c >= 5) cls += ' weekend-col';
+      if (scheduleOverrideForDate(addDays(start, c))) cls += ' adjusted-col';
       if (todayInView && c === todayWd) {
         cls += ' today-col';
         const [a, b] = parseSlotTime(state.meta.slotTimes[r]);
@@ -456,22 +482,32 @@ function renderScheduleBody() {
     ]));
   });
 
-  const courses = state.courses.filter(c => courseInWeek(c, w));
-  for (const c of courses) {
+  const displayCourses = [];
+  for (let column = 0; column < 7; column++) {
+    const targetDate = addDays(start, column);
+    const sourceWeekday = scheduleWeekdayForDate(targetDate);
+    const sourceWeek = scheduleWeekForDate(targetDate, w);
+    const override = scheduleOverrideForDate(targetDate);
+    state.courses
+      .filter(course => course.weekday === sourceWeekday && courseInWeek(course, sourceWeek))
+      .forEach(course => displayCourses.push({ course, column, targetDate, override }));
+  }
+  for (const entry of displayCourses) {
+    const c = entry.course;
     let s = c.startSlot - 1, e = c.endSlot - 1;
     if (s < 0) s = 0;
     if (e >= slotCount) e = slotCount - 1;
     if (s > e) continue;
-    const inTodayCol = todayInView && c.weekday === todayWd;
+    const inTodayCol = todayInView && entry.column === todayWd;
     const el = document.createElement('div');
-    el.className = 'course-block' + (inTodayCol ? ' today' : '');
-    el.style.gridColumn = String(c.weekday + 2);
+    el.className = 'course-block' + (inTodayCol ? ' today' : '') + (entry.override ? ' adjusted' : '');
+    el.style.gridColumn = String(entry.column + 2);
     el.style.gridRow = `${s + 1} / ${e + 2}`;   // grid 无表头行：起始行 = 起始节次
     el.style.setProperty('--cb', c.color || 'var(--p)');
     const loc = c.room || '';   // 色块内只展示课程名 + 教室
     el.innerHTML = `<div class="cb-name">${cbNameLines(c.name)}</div>
       ${loc ? `<div class="cb-sub">${esc(loc)}</div>` : ''}`;
-    el.title = `${c.name}${c.room ? ' · ' + c.room : ''}${c.teacher ? ' · ' + c.teacher : ''}`;
+    el.title = `${c.name}${c.room ? ' · ' + c.room : ''}${c.teacher ? ' · ' + c.teacher : ''}${entry.override ? ` · 调休至${strFromDate(entry.targetDate)}` : ''}`;
     el.addEventListener('click', ev => { ev.stopPropagation(); openCourseDetailModal(c); });
     el.addEventListener('contextmenu', ev => openScheduleContextMenu(ev, [
       { label: '复制课程', action: () => copyCourse(c) },
@@ -479,7 +515,7 @@ function renderScheduleBody() {
     ]));
     g.appendChild(el);
   }
-  byId('schedule-hint').textContent = courses.length
+  byId('schedule-hint').textContent = displayCourses.length
     ? '点击课程查看详情 · 右键课程复制，右键空白格粘贴'
     : '本周暂无课程 · 点击空白格添加，右键可粘贴';
 }
@@ -487,8 +523,9 @@ function renderScheduleBody() {
 /* ─────────────── 渲染：今日页 / 倒数日 ─────────────── */
 function renderTodayList() {
   const list = byId('today-list');
-  const w = effectiveWeek();
-  const todayWd = (new Date().getDay() + 6) % 7;
+  const today = new Date();
+  const w = scheduleWeekForDate(today, effectiveWeek());
+  const todayWd = scheduleWeekdayForDate(today);
   const items = state.courses
     .filter(c => c.weekday === todayWd && courseInWeek(c, w))
     .sort((a, b) => a.startSlot - b.startSlot);
@@ -517,6 +554,14 @@ function renderTodayList() {
       if (c) openCourseModal(c);
     });
   });
+}
+function renderAdjustmentBanner() {
+  const el = byId('today-adjustment');
+  if (!el) return;
+  const item = scheduleOverrideForDate(new Date());
+  if (!item) { el.hidden = true; el.textContent = ''; return; }
+  el.hidden = false;
+  el.textContent = `今日调休 · 按 ${scheduleOverrideText(item)} 的课程上课`;
 }
 /* 倒数日：支持精确到分钟 */
 function countdownDateTime(cd) {
@@ -906,9 +951,9 @@ function checkReminders() {
   const now = new Date();
   const todayKey = strFromDate(now);
   state.meta.notified = state.meta.notified.filter(k => k.startsWith(todayKey));
-  const w = effectiveWeek();
+  const w = scheduleWeekForDate(now, effectiveWeek());
   const min = state.meta.remindMinutes;
-  const todayWd = (now.getDay() + 6) % 7;
+  const todayWd = scheduleWeekdayForDate(now);
   const nowMin = now.getHours() * 60 + now.getMinutes();
   let changed = false;
   for (const c of state.courses) {
@@ -945,6 +990,15 @@ function renderSlotEditor() {
     });
   });
 }
+function renderScheduleOverrides() {
+  const list = byId('set-adjust-list');
+  if (!list) return;
+  const items = [...(state.meta.scheduleOverrides || [])].sort((a, b) => a.date.localeCompare(b.date));
+  list.innerHTML = items.length ? items.map(x => `<div class="adjust-item">
+    <span><b>${esc(x.date)}</b><small>按 ${esc(scheduleOverrideText(x))} 的课程上课${x.sourceDate ? '' : '（旧配置）'}</small></span>
+    <button type="button" class="sl-del" data-date="${esc(x.date)}" aria-label="删除${esc(x.date)}调休">✕</button>
+  </div>`).join('') : '<div class="adjust-empty">暂无调休安排</div>';
+}
 function refreshSettings() {
   byId('set-semester-start').value = state.meta.semesterStart;
   byId('set-total-weeks').value = state.meta.totalWeeks;
@@ -963,6 +1017,10 @@ function refreshSettings() {
   if (cwo) { cwo.checked = state.meta.countdownWarnOn !== false; cw.disabled = !cwo.checked; }
   const ste = byId('slot-editor-toggle-label');
   if (ste) ste.textContent = state.meta.slotTimes.length + ' 节 · 展开编辑';
+  const adjustDate = byId('set-adjust-date');
+  if (adjustDate && !adjustDate.value) adjustDate.value = strFromDate(new Date());
+  const adjustSourceDate = byId('set-adjust-source-date');
+  if (adjustSourceDate && !adjustSourceDate.value) adjustSourceDate.value = strFromDate(new Date());
   byId('set-theme-swatches').innerHTML = Object.keys(THEMES).map(k =>
     `<button class="swatch${k === state.meta.theme ? ' active' : ''}" data-theme="${k}" style="background:${THEMES[k].primary}"><span class="sw-name">${THEMES[k].name}</span></button>`).join('');
   const nb = byId('set-btn-notify');
@@ -976,6 +1034,7 @@ function refreshSettings() {
     nb.disabled = true; nb.style.opacity = .5;
   }
   renderSlotEditor();
+  renderScheduleOverrides();
 }
 
 /* ─────────────── 视图切换 ─────────────── */
@@ -991,6 +1050,7 @@ function renderAll() {
   renderWeekLabel();
   renderSchedule();
   renderTodayList();
+  renderAdjustmentBanner();
   renderCdList();
   updateNextBanners();
   refreshSettings();
@@ -1080,6 +1140,25 @@ function bindEvents() {
     saveState(); refreshSettings(); renderAll(); toast('已设为本周');
   };
   byId('set-btn-week-reset').onclick = () => { state.meta.weekMode = 'auto'; saveState(); refreshSettings(); renderAll(); };
+
+  /* 设置：调休安排 */
+  byId('set-adjust-add').onclick = () => {
+    const date = byId('set-adjust-date').value;
+    const sourceDate = byId('set-adjust-source-date').value;
+    if (!date || isNaN(dateFromStr(date).getTime())) { toast('请选择有效的调休日期'); return; }
+    if (!sourceDate || isNaN(dateFromStr(sourceDate).getTime())) { toast('请选择有效的参照日期'); return; }
+    const items = state.meta.scheduleOverrides || (state.meta.scheduleOverrides = []);
+    const existing = items.find(x => x.date === date);
+    if (existing) { existing.sourceDate = sourceDate; delete existing.weekday; }
+    else items.push({ date, sourceDate });
+    saveState(); renderAll(); toast(`已设置${date}按${sourceDate}的课程上课`);
+  };
+  byId('set-adjust-list').addEventListener('click', e => {
+    const button = e.target.closest('[data-date]');
+    if (!button) return;
+    state.meta.scheduleOverrides = (state.meta.scheduleOverrides || []).filter(x => x.date !== button.dataset.date);
+    saveState(); renderAll(); toast('已删除调休安排');
+  });
 
   /* 设置：节次时间 */
   byId('slot-editor-add').onclick = () => {
@@ -1171,6 +1250,6 @@ if (typeof document !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     parseSlotTime, toMin, fmtMin, strFromDate, dateFromStr, startOfDay, addDays,
-    resolveWeekdayToken, cn2num, courseInWeek, describeWeeks, cloneCourseAt,
+    resolveWeekdayToken, cn2num, courseInWeek, describeWeeks, cloneCourseAt, adjustedWeekday,
   };
 }

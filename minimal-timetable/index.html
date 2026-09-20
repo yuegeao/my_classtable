@@ -10,7 +10,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>极简课表</title>
-  <link rel="stylesheet" href="style.css?v=132">
+  <link rel="stylesheet" href="style.css?v=135">
 </head>
 <body>
 
@@ -42,6 +42,7 @@
   <!-- ═══ 视图②：今日 ═══ -->
   <section id="view-today" class="view active">
     <div id="today-next" class="next-card"></div>
+    <div id="today-adjustment" class="adjustment-banner" hidden></div>
     <div class="section-title">今日课程</div>
     <div id="today-list" class="today-list"></div>
   </section>
@@ -133,6 +134,21 @@
     </div>
 
     <div class="group">
+      <div class="group-title">调休安排</div>
+      <div class="row adjust-form-row">
+        <label>日期映射</label>
+        <div class="adjust-form">
+          <label class="adjust-date-field"><span>调休日期</span><input type="date" id="set-adjust-date"></label>
+          <span class="adjust-arrow">按</span>
+          <label class="adjust-date-field"><span>参照日期</span><input type="date" id="set-adjust-source-date"></label>
+          <button id="set-adjust-add" class="mini-btn primary">添加 / 更新</button>
+        </div>
+      </div>
+      <div id="set-adjust-list" class="adjust-list"></div>
+      <div class="note">例如将 10 月 10 日设置为按 9 月 28 日的课程上课；星期和课程周次都会跟随参照日期。</div>
+    </div>
+
+    <div class="group">
       <div class="group-title">提醒</div>
       <div class="row">
         <label>上课提醒</label>
@@ -168,7 +184,7 @@
 
     <div class="group">
       <div class="group-title">关于</div>
-      <div class="about">极简课表 v1.23 · 本地存储</div>
+      <div class="about">极简课表 v1.35 · 本地存储</div>
     </div>
   </section>
 </main>
@@ -200,7 +216,7 @@
 <!-- ═══ 隐藏文件输入 ═══ -->
 
 
-  <script src="app.js?v=132"></script>
+  <script src="app.js?v=135"></script>
 <script>
 /* PWA：仅 http/https 环境注册 Service Worker（离线缓存） */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].indexOf(location.hostname) >= 0)) {
